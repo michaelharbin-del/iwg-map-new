@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IWG Decommissioning - Live Team Tracking</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { text-align: center; margin-bottom: 20px; }
+        h1 { color: #333; font-size: 28px; margin-bottom: 10px; }
+        .subtitle { color: #666; font-size: 14px; }
+        .sync-status { display: inline-block; padding: 8px 16px; border-radius: 4px; font-size: 13px; margin-top: 10px; font-weight: 500; }
+        .sync-status.synced { background: #d4edda; color: #155724; }
+        .sync-status.syncing { background: #d1ecf1; color: #0c5460; }
+        .sync-status.error { background: #f8d7da; color: #721c24; }
+        .tabs { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; justify-content: center; }
+        .tab-btn { padding: 10px 20px; border: 2px solid #ddd; background: white; cursor: pointer; border-radius: 6px; font-weight: 500; transition: all 0.3s; }
+        .tab-btn.active { background: #366092; color: white; border-color: #366092; }
+        .map-container { display: none; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 30px; }
+        .map-container.active { display: block; }
+        .map-header { background: #366092; color: white; padding: 15px 20px; font-size: 16px; font-weight: 500; }
+        .map-info { padding: 12px 20px; background: #f9f9f9; border-bottom: 1px solid #eee; font-size: 13px; color: #666; }
+        .map-canvas { height: 600px; width: 100%; }
+        .summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin-bottom: 30px; }
+        .summary-card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); text-align: center; }
+        .summary-card .number { font-size: 32px; font-weight: bold; color: #366092; margin: 10px 0; }
+        .summary-card.collected { background: #e8f5e9; }
+        .summary-card.collected .number { color: #28a745; }
+        .label { font-size: 13px; color: #666; }
+        .popup-content { min-width: 250px; font-size: 13px; }
+        .popup-checkbox { margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd; }
+        .popup-checkbox label { cursor: pointer; display: flex; align-items: center; }
+        .popup-checkbox input { margin-right: 8px; cursor: pointer; }
+        .legend { background: white; padding: 15px; border-radius: 8px; margin-top: 20px; font-size: 13px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🗺️ IWG Decommissioning - Live Team Tracking</h1>
+            <p class="subtitle">Connected to your IWG Hardware Collections sheet • Real-time updates</p>
+            <span class="sync-status syncing" id="sync-status">🔄 Loading from Google Sheet...</span>
+        </div>
+
+        <div class="summary">
+            <div class="summary-card">
+                <div class="label">Remaining Sites</div>
+                <div class="number" id="remaining-count">-</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">📷 Cameras Remaining</div>
+                <div class="number" id="remaining-cameras">-</div>
+            </div>
+            <div class="summary-card">
+                <div class="label">📱 Tablets Remaining</div>
+                <div class="number" id="remaining-tablets">-</div>
+            </div>
+            <div class="summary-card collected">
+                <div class="label">✓ Collected Sites</div>
+                <div class="number" id="collected-count">0</div>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('all')">All Sites</button>
+            <button class="tab-btn" onclick="switchTab('collected')">✓ Collected</button>
+            <button class="tab-btn" onclick="location.reload()">🔄 Refresh Data</button>
+        </div>
+
+        <div id="all" class="map-container active">
+            <div class="map-header">All Collection Sites</div>
+            <div class="map-info">Click markers to mark sites as collected • Data syncs to your Google Sheet</div>
+            <div id="map-all" class="map-canvas"></div>
+        </div>
+
+        <div id="collected" class="map-container">
+            <div class="map-header">✓ Collected Sites</div>
+            <div class="map-info">Sites marked as collected across your team</div>
+            <div id="map-collected" class="map-canvas"></div>
+        </div>
+
+        <div class="legend">
+            <strong>📍 How to use:</strong><br>
+            1. Click any location marker<br>
+            2. Check "Mark as collected" in the popup<br>
+            3. Data instantly saves to your Google Sheet<br>
+            4. Your teammates see the update when they refresh<br>
+            <strong>Blue markers</strong> = Pending | <strong>Green markers</strong> = Collected
+        </div>
+    </div>
+
+    <script>
+        // Google Apps Script URL
+        const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbw3j3KHvdi4jyfbtxB_twvpEQyJia-mDLfzfklRWqmijP4mOwKlGVjF9A7ogDBzCLjI_g/exec';
+
+        let allSites = [];
+        let collectedSites = new Set();
+        let maps = {};
+        let markers = {};
+
+        async function loadSheetData() {
+            try {
+                updateSyncStatus('Loading...');
+                const response = await fetch(APPS_SCRIPT_URL);
+                const data = await response.json();
+                
+                allSites = data.map(row => ({
+                    name: row.Name || row.name || '',
+                    cameras: parseInt(row.ANPR) || 0,
+                    tablets: parseInt(row.Tablets) || 0,
+                    collected: row.Collected === true || row.Collected === 'TRUE' || row.Collected === 'yes',
+                    brand: row.Brand || ''
+                })).filter(site => site.name);
+
+                collectedSites.clear();
+                allSites.forEach(site => {
+                    if (site.collected) {
+                        collectedSites.add(site.name);
+                    }
+                });
+
+                updateSummary();
+                updateAllMaps();
+                updateSyncStatus('synced');
+            } catch (error) {
+                console.error('Error loading data:', error);
+                updateSyncStatus('error');
+            }
+        }
+
+        function initMap(id, data) {
+            const map = L.map(id).setView([54, -3], 6);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '© OpenStreetMap contributors'
+            }).addTo(map);
+
+            data.forEach(site => {
+                const coords = getSiteCoordinates(site.name);
+                const isCollected = collectedSites.has(site.name);
+                const color = isCollected ? '#28a745' : '#366092';
+                const popupId = site.name.replace(/[^a-z0-9]/gi, '_');
+                
+                const popupHTML = `
+                    <div class="popup-content">
+                        <strong>${site.name}</strong><br>
+                        📷 Cameras: ${site.cameras}<br>
+                        📱 Tablets: ${site.tablets}<br>
+                        ${site.brand ? `Brand: ${site.brand}<br>` : ''}
+                        <div class="popup-checkbox">
+                            <label>
+                                <input type="checkbox" id="check_${popupId}" ${isCollected ? 'checked' : ''} 
+                                    onchange="toggleCollected('${site.name}', this.checked)">
+                                Mark as collected
+                            </label>
+                        </div>
+                    </div>
+                `;
+                
+                const marker = L.circleMarker(coords, {
+                    radius: 6,
+                    fillColor: color,
+                    color: '#fff',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }).bindPopup(popupHTML).addTo(map);
+                
+                markers[site.name] = {marker, map, site};
+            });
+
+            return map;
+        }
+
+        function getSiteCoordinates(name) {
+            const coords = {
+                'CRAWLEY, Gatwick Airport Manor Royal': [51.134, -0.182],
+                'GUILDFORD, Station View': [51.240, -0.582],
+                'SOUTHAMPTON, Airport': [50.951, -1.357],
+                'HAYWARDS HEATH': [51.009, -0.100],
+                'Regus Heathrow, Bath Road': [51.483, -0.484],
+                'Regus Heathrow, Stockley Park': [51.509, -0.437],
+                'DARTFORD, Admirals Park': [51.455, 0.250],
+                'Regus Manchester Airport': [53.367, -2.265],
+                'MANCHESTER, Spaces Peter House': [53.477, -2.244],
+                'EDINBURGH, Princes Street': [55.952, -3.198],
+                'Regus Edinburgh, South Gyle': [55.935, -3.309],
+                'Regus Sunderland Doxford International': [54.863, -1.438],
+                'CHESTER, Chester Business Park': [53.160, -2.904],
+                'Regus Bracknell Arlington Square': [51.415, -0.758],
+                'Spaces Marlow Globe Park': [51.574, -0.762],
+                'Regus Bristol Aztec West': [51.545, -2.571],
+                'SLOUGH, Bath Road': [51.518, -0.630],
+                'STAINES, London Road': [51.436, -0.502],
+                'READING, Green Park': [51.425, -0.988]
+            };
+            return coords[name] || [54, -3];
+        }
+
+        async function toggleCollected(siteName, isChecked) {
+            try {
+                if (isChecked) {
+                    collectedSites.add(siteName);
+                } else {
+                    collectedSites.delete(siteName);
+                }
+                
+                const response = await fetch(APPS_SCRIPT_URL, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        siteName: siteName,
+                        collected: isChecked
+                    })
+                });
+
+                updateAllMaps();
+                updateSummary();
+            } catch (error) {
+                console.error('Error updating:', error);
+                alert('Error saving to Google Sheet. Check console for details.');
+            }
+        }
+
+        function updateAllMaps() {
+            Object.entries(markers).forEach(([siteName, {marker}]) => {
+                const isCollected = collectedSites.has(siteName);
+                const color = isCollected ? '#28a745' : '#366092';
+                marker.setStyle({fillColor: color});
+            });
+        }
+
+        function updateSummary() {
+            const totalCameras = allSites.reduce((s, c) => s + c.cameras, 0);
+            const totalTablets = allSites.reduce((s, c) => s + c.tablets, 0);
+            const collectedData = allSites.filter(s => collectedSites.has(s.name));
+            const collectedCameras = collectedData.reduce((s, c) => s + c.cameras, 0);
+            const collectedTablets = collectedData.reduce((s, c) => s + c.tablets, 0);
+            
+            document.getElementById('remaining-count').textContent = allSites.length - collectedSites.size;
+            document.getElementById('remaining-cameras').textContent = totalCameras - collectedCameras;
+            document.getElementById('remaining-tablets').textContent = totalTablets - collectedTablets;
+            document.getElementById('collected-count').textContent = collectedSites.size;
+        }
+
+        function updateSyncStatus(status) {
+            const el = document.getElementById('sync-status');
+            if (status === 'synced') {
+                el.textContent = '✓ Connected to your Google Sheet';
+                el.className = 'sync-status synced';
+            } else if (status === 'error') {
+                el.textContent = '⚠ Check your Apps Script URL - refresh to retry';
+                el.className = 'sync-status error';
+            } else {
+                el.textContent = '🔄 ' + status;
+                el.className = 'sync-status syncing';
+            }
+        }
+
+        function switchTab(tab) {
+            document.querySelectorAll('.map-container').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById(tab).classList.add('active');
+            event.target.classList.add('active');
+            
+            const mapId = 'map-' + tab;
+            if (!maps[mapId]) {
+                let data = tab === 'collected' 
+                    ? allSites.filter(s => collectedSites.has(s.name))
+                    : allSites;
+                maps[mapId] = initMap(mapId, data);
+            } else {
+                maps[mapId].invalidateSize();
+            }
+        }
+
+        window.addEventListener('load', () => {
+            if (APPS_SCRIPT_URL === 'PASTE_YOUR_DEPLOYMENT_URL_HERE') {
+                updateSyncStatus('error: Apps Script URL missing');
+                return;
+            }
+            loadSheetData();
+            setTimeout(() => {
+                maps['map-all'] = initMap('map-all', allSites);
+            }, 500);
+        });
+
+        // Refresh data every 5 seconds
+        setInterval(loadSheetData, 5000);
+    </script>
+</body>
+</html>
